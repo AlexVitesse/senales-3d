@@ -1,0 +1,10 @@
+{
+  "name": "senales-3d",
+  "version": "0.1.0",
+  "description": "Bus de señales, bindings declarativos señal → objeto y bandas transportadoras cinemáticas para gemelos three.js r160.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "scripts": { "test": "node prueba.mjs" }
+}

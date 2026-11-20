@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>senales-3d · demo</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #10141a; color: #dfe4ea; font: 14px/1.4 system-ui, sans-serif; overflow: hidden; }
+  #hud { position: fixed; top: 12px; left: 12px; background: #0009; padding: 10px 14px; border-radius: 8px; max-width: 320px; }
+  #hud label { display: block; margin: 4px 0; } #hud code { color: #9cc7ff; }
+  .etq { background: #000a; color: #fff; padding: 2px 6px; border-radius: 4px; font: 600 13px system-ui; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="hud">
+  <b>senales-3d</b> · señales simuladas cada 2 s (como un dato lento)<br>
+  <label><input type="checkbox" id="marcha" checked> <code>motor.marcha</code> (gira el motor y mueve la banda)</label>
+  <label><input type="checkbox" id="tope"> <code>banda.tope</code> abierto</label>
+  <label>falla <select id="falla"><option value="0">0 · normal</option><option value="2">2 · aviso</option><option value="3">3 · alarma</option></select></label>
+  <div id="est"></div>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+import { crearSenales } from '../senales.js';
+import { crearBindings } from '../bindings.js';
+import { crearLinea, dibujarLinea } from '../banda.js';
+
+const renderer = new THREE.WebGLRenderer({ antialias: true }); renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); document.body.appendChild(renderer.domElement);
+const etiquetas = new CSS2DRenderer(); etiquetas.domElement.style.cssText = 'position:fixed;inset:0;pointer-events:none'; document.body.appendChild(etiquetas.domElement);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x10141a);
+const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 200); camera.position.set(6, 6, 9);
+const controls = new OrbitControls(camera, renderer.domElement); controls.target.set(1, 0.8, 0);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x334455, 1.2)); const sol = new THREE.DirectionalLight(0xffffff, 1.5); sol.position.set(5, 10, 4); scene.add(sol);
+scene.add(new THREE.GridHelper(20, 20, 0x334455, 0x222a33));
+const std = (c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.6, metalness: 0.2 });
+
+// banda: 6 m sobre el eje X, a 0.8 m de altura
+const desde = [-3, 0.8, 2], hasta = [3, 0.8, 2];
+const cuerpo = new THREE.Mesh(new THREE.BoxGeometry(6, 0.1, 0.6), std(0x2b2f36)); cuerpo.position.set(0, 0.75, 2); scene.add(cuerpo);
+const topeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.4, 0.7), std(0xd2452f)); topeMesh.name = 'tope'; topeMesh.position.set(1.5, 1, 2); scene.add(topeMesh);
+const sensor = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.8), std(0x8a9099)); sensor.name = 'sensor'; sensor.position.set(1.0, 1.25, 2); scene.add(sensor);
+
+// tanque con nivel: el líquido tiene el pivote en la base (geometría trasladada)
+const tanque = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 2.5, 32, 1, true), new THREE.MeshStandardMaterial({ color: 0x9aa4ad, transparent: true, opacity: 0.25, side: THREE.DoubleSide }));
+tanque.position.set(-2, 1.25, -1.5); scene.add(tanque);
+const liquido = new THREE.Mesh(new THREE.CylinderGeometry(0.76, 0.76, 2.45, 32).translate(0, 1.225, 0), std(0x2f86d8)); liquido.name = 'tanque.liquido'; liquido.position.set(-2, 0.02, -1.5); scene.add(liquido);
+const div = document.createElement('div'); div.className = 'etq'; const etq = new CSS2DObject(div); etq.name = 'tanque.etq'; etq.position.set(-2, 2.9, -1.5); scene.add(etq);
+
+// motor con flecha que gira y lámpara de estado
+const motor = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.6, 0.6), std(0x3a6b4a)); motor.position.set(2, 0.3, -1.5); scene.add(motor);
+const flecha = new THREE.Group(); flecha.name = 'motor.flecha'; flecha.position.set(2.6, 0.3, -1.5); scene.add(flecha);
+const eje = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.5, 12), std(0xcfd4da)); eje.rotation.z = Math.PI / 2; eje.position.x = 0.25; flecha.add(eje);
+const aspa = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.7, 0.12), std(0xe0b030)); aspa.position.x = 0.5; flecha.add(aspa);
+const lampara = new THREE.Mesh(new THREE.SphereGeometry(0.15, 16, 12), std(0x8a9099)); lampara.name = 'motor.lampara'; lampara.position.set(2, 0.8, -1.5); scene.add(lampara);
+
+// bus, tabla de bindings (en un gemelo real vendría de un .json) y línea
+const S = crearSenales({ viejaMs: 10e3 });
+const B = crearBindings({ raiz: scene, senales: S, tabla: [
+  { senal: 'tanque.nivel', objeto: 'tanque.liquido', efecto: 'nivel', min: 0, max: 100, suavizado: 1.5 },
+  { senal: 'tanque.nivel', objeto: 'tanque.etq', efecto: 'texto', formato: 'Nivel {v} %', suavizado: 1.5 },
+  { senal: 'motor.rpm', objeto: 'motor.flecha', efecto: 'girar', eje: 'x', velocidad: 2 * Math.PI / 60, suavizado: 1 },
+  { senal: 'motor.falla', objeto: 'motor.lampara', efecto: 'estado', mapa: { 0: 'High', 2: 'Warning', 3: 'Error' }, parpadeo: true },
+  { senal: 'banda.sensor', objeto: 'sensor', efecto: 'estado' },
+  { senal: 'banda.tope', objeto: 'tope', efecto: 'visible', invertir: true },
+] });
+const L = crearLinea({ senales: S });
+L.banda('b1', { desde, hasta, velocidad: 0.6, gap: 0.08, senalMarcha: 'motor.marcha' });
+L.fuente('f1', { banda: 'b1', cadaSeg: 1.2, largoPieza: 0.35 });
+L.sensor('s1', { banda: 'b1', en: 4.0, largo: 0.02, senal: 'banda.sensor' });
+L.tope('t1', { banda: 'b1', en: 4.5, senalAbierto: 'banda.tope' });
+L.sumidero('fin', { banda: 'b1', senal: 'banda.salidas' });
+const dib = dibujarLinea(THREE, L, { max: 100 }); dib.mesh.position.y = 0.05; scene.add(dib.mesh);
+
+// simulador: datos que llegan cada 2 s (en un gemelo real, el SSE o el polling de /api/live hace S.lote(...))
+const $ = (id) => document.getElementById(id);
+let nivel = 40;
+const simula = () => {
+  const marcha = $('marcha').checked;
+  nivel = Math.min(100, Math.max(0, nivel + (marcha ? 4 : -2) + (Math.random() - 0.5) * 2));
+  S.lote({ 'tanque.nivel': +nivel.toFixed(1), 'motor.rpm': marcha ? 60 : 0, 'motor.marcha': marcha, 'motor.falla': +$('falla').value, 'banda.tope': $('tope').checked });
+};
+simula(); setInterval(simula, 2000);
+for (const id of ['marcha', 'tope', 'falla']) $(id).addEventListener('change', simula);
+
+const resize = () => { renderer.setSize(innerWidth, innerHeight); etiquetas.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); };
+addEventListener('resize', resize); resize();
+const reloj = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(reloj.getDelta(), 0.1);
+  S.tick();               // 1) aplica lo que llegó por red
+  L.paso(dt); S.tick();   // 2) la línea mueve piezas y escribe sensores (se ven en el mismo cuadro)
+  B.actualizar(dt); dib.actualizar();
+  $('est').textContent = `salidas: ${L.conteo('fin')} · en banda: ${L.piezas('b1').length} · versión del bus: ${S.version}`;
+  controls.update(); renderer.render(scene, camera); etiquetas.render(scene, camera);
+});
+</script>
+</body>
+</html>
